@@ -1,8 +1,6 @@
-# Python Template
+# Tanimoto GP
 
-**Project description here**
-
-This is a template project so I don't need to keep setting up pre-commit.
+Work in progress- a small library for Tanimoto kernel GPs.
 
 ## Development
 
