@@ -8,11 +8,7 @@ For a minimal running example, see `examples/logp_regression.py`.
 
 ### Installation
 
-Install `kern_gp` using:
-
-```bash
-https://github.com/AustinT/kernel-only-GP.git
-```
+Install `kern_gp` from `https://github.com/AustinT/kernel-only-GP`.
 
 (currently works with v0.1.0, future compatibility unclear)
 
