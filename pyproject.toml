@@ -6,7 +6,7 @@ include = '\.pyi?$'
 python_version = 3.9  # pin modern python version
 ignore_missing_imports = true
 
-[tool.ruff]
+[tool.ruff.lint]
 line-length = 120
 # Check https://beta.ruff.rs/docs/rules/ for full list of rules
 select = [
