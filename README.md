@@ -2,6 +2,8 @@
 
 Work in progress- a small library for Tanimoto kernel GPs.
 
+For a minimal running example, see `examples/logp_regression.py`.
+
 ## Development
 
 ### Installation
