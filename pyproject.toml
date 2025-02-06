@@ -31,6 +31,8 @@ dev = [
 # Guidance from: https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html
 packages = ["tanimoto_gp"]
 
+[tool.setuptools_scm]
+
 [tool.black]
 line-length = 120
 include = '\.pyi?$'
