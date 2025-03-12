@@ -18,8 +18,8 @@ class ZeroMeanTanimotoGP:
     def __init__(self, fp_func: Callable[[str], Any], smiles_train: list[str], y_train):
         super().__init__()
         self._fp_func = fp_func
-        self._K_test_train_cache = None
-        
+        self._K_test_train = None
+        self._test_smiles = None
         self.set_training_data(smiles_train, y_train)
 
     def set_training_data(self, smiles_train: list[str], y_train: jnp.ndarray):
@@ -41,9 +41,13 @@ class ZeroMeanTanimotoGP:
 
     def predict_f(self, params: TanimotoGP_Params, smiles_test: list[str], full_covar: bool = True) -> jnp.ndarray:
 
-        # Construct kernel matrices
-        fp_test = [self._fp_func(smiles) for smiles in smiles_test]
-        K_test_train = jnp.asarray([DataStructs.BulkTanimotoSimilarity(fp, self._fp_train) for fp in fp_test])
+        # Initialize K_test_train for first prediction
+        if self._K_test_train is None:
+            # Compute and cache K_test_train
+            fp_test = [self._fp_func(smiles) for smiles in smiles_test]
+            self._K_test_train = jnp.asarray([DataStructs.BulkTanimotoSimilarity(fp, self._fp_train) for fp in fp_test])
+            self._test_smiles = smiles_test
+
         if full_covar:
             K_test_test = jnp.asarray([DataStructs.BulkTanimotoSimilarity(fp, fp_test) for fp in fp_test])
         else:
@@ -80,29 +84,28 @@ class ZeroMeanTanimotoGP:
         
         return self._L_cached
 
-    def add_observation(self, params: TanimotoGP_Params, new_smiles: str, new_y: float) -> None:
+    def add_observation(self, params: TanimotoGP_Params, idx: int, new_y: float) -> None:
         """
         Add a single observation and efficiently update cached Cholesky factorization.
-        Avoids recomputing K_train_train and Cholesky factorization repeatedly during BO.
+        Avoids recomputing K_train_train, K_test_train, and Cholesky factorization repeatedly during BO.
         """
-        new_fp = self._fp_func(new_smiles)
-
-        # Compute Tanimoto similarity between new observation and each existing training point
-        k_new = jnp.asarray(DataStructs.BulkTanimotoSimilarity(new_fp, self._fp_train))
-
-        # Diagonal term is Tanimoto simiarity of new observation w.r.t. itself
-        k_new_new = jnp.array(1.0)
+        new_smiles = self._test_smiles[idx]
+        k_new = self._K_test_train[idx]
 
         # Update training data
         self._smiles_train.append(new_smiles)
         self._y_train = jnp.append(self._y_train, new_y)
-        self._fp_train.append(new_fp)
+        self._fp_train.append(self._fp_func(new_smiles))
 
-        # Update kernel matrix
+        # Update K_train_train with row from K_test_train
         n = len(k_new)
         top_block = jnp.concatenate([self._K_train_train, k_new.reshape(n, 1)], axis=1)
-        bottom_row = jnp.concatenate([k_new, k_new_new.reshape(1,)])
+        bottom_row = jnp.concatenate([k_new, jnp.array([1.0])])
         self._K_train_train = jnp.concatenate([top_block, bottom_row.reshape(1, n+1)], axis=0)
+
+        # Remove selected row/column from K_test_train and test_smiles
+        self._K_test_train = jnp.delete(self._K_test_train, idx, axis=0)
+        self._test_smiles.pop(idx)
 
         # If we have cached L, update it efficiently
         if self._L_cached is not None:
