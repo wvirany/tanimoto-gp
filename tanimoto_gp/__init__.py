@@ -18,6 +18,8 @@ class ZeroMeanTanimotoGP:
     def __init__(self, fp_func: Callable[[str], Any], smiles_train: list[str], y_train):
         super().__init__()
         self._fp_func = fp_func
+        self._K_test_train_cache = None
+        
         self.set_training_data(smiles_train, y_train)
 
     def set_training_data(self, smiles_train: list[str], y_train: jnp.ndarray):
