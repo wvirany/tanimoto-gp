@@ -12,9 +12,10 @@ class TanimotoGP_Params(NamedTuple):
     # Inverse softplus of GP parameters
     raw_amplitude: jnp.ndarray
     raw_noise: jnp.ndarray
+    empirical_mean: jnp.ndarray
 
 
-class ZeroMeanTanimotoGP:
+class ConstantMeanTanimotoGP:
     def __init__(self, fp_func: Callable[[str], Any], smiles_train: list[str], y_train):
         super().__init__()
         self._fp_func = fp_func
@@ -29,11 +30,13 @@ class ZeroMeanTanimotoGP:
         )
 
     def marginal_log_likelihood(self, params: TanimotoGP_Params) -> jnp.ndarray:
+        mean = params.empirical_mean
+        y_centered = self._y_train - mean
         return kgp.mll_train(
             a=TRANSFORM(params.raw_amplitude),
             s=TRANSFORM(params.raw_noise),
             k_train_train=self._K_train_train,
-            y_train=self._y_train,
+            y_train=y_centered,
         )
 
     def predict_f(self, params: TanimotoGP_Params, smiles_test: list[str], full_covar: bool = True) -> jnp.ndarray:
@@ -46,15 +49,23 @@ class ZeroMeanTanimotoGP:
         else:
             K_test_test = jnp.ones((len(smiles_test)), dtype=float)
 
-        return kgp.noiseless_predict(
+        # Get centered predictions
+        mean = params.empirical_mean
+        y_centered = self._y_train - mean
+
+        # Get predictions from centered GP
+        mean_pred, covar = kgp.noiseless_predict(
             a=TRANSFORM(params.raw_amplitude),
             s=TRANSFORM(params.raw_noise),
             k_train_train=self._K_train_train,
             k_test_train=K_test_train,
             k_test_test=K_test_test,
-            y_train=self._y_train,
+            y_train=y_centered,
             full_covar=full_covar,
         )
+
+        # Add mean back to predictions
+        return mean_pred + mean, covar
 
     def predict_y(self, params: TanimotoGP_Params, smiles_test: list[str], full_covar: bool = True) -> jnp.ndarray:
         mean, covar = self.predict_f(params, smiles_test, full_covar)
