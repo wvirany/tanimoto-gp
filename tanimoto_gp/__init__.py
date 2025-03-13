@@ -12,7 +12,9 @@ class TanimotoGP_Params(NamedTuple):
     # Inverse softplus of GP parameters
     raw_amplitude: jnp.ndarray
     raw_noise: jnp.ndarray
-    empirical_mean: jnp.ndarray
+
+    # Prior mean
+    mean: jnp.ndarray
 
 
 class ConstantMeanTanimotoGP:
@@ -30,8 +32,7 @@ class ConstantMeanTanimotoGP:
         )
 
     def marginal_log_likelihood(self, params: TanimotoGP_Params) -> jnp.ndarray:
-        mean = params.empirical_mean
-        y_centered = self._y_train - mean
+        y_centered = self._y_train - params.mean
         return kgp.mll_train(
             a=TRANSFORM(params.raw_amplitude),
             s=TRANSFORM(params.raw_noise),
@@ -50,7 +51,7 @@ class ConstantMeanTanimotoGP:
             K_test_test = jnp.ones((len(smiles_test)), dtype=float)
 
         # Get centered predictions
-        mean = params.empirical_mean
+        mean = params.mean
         y_centered = self._y_train - mean
 
         # Get predictions from centered GP
