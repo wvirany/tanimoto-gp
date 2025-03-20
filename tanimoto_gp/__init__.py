@@ -12,7 +12,7 @@ class TanimotoGP_Params(NamedTuple):
     # Inverse softplus of GP parameters
     raw_amplitude: jnp.ndarray
     raw_noise: jnp.ndarray
-    
+
     # Consant mean function
     mean: jnp.ndarray
 
