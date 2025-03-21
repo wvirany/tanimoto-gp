@@ -164,6 +164,7 @@ class FixedTanimotoGP:
         Adds a single observation and efficiently updates cached matrices
 
         Args:
+            params: GP parameters used
             idx: Index in test set of new observation
             new_y: Value of new observation
         """
