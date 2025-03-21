@@ -81,87 +81,55 @@ class FixedTanimotoGP:
     """ConstantMeanTanimotoGP with fixed parameters and test set for caching data"""
 
     def __init__(
-        self,
-        fp_func: Callable[[str], Any],
-        smiles_train: list[str],
-        y_train: jnp.ndarray,
-        amplitude: float,
-        noise: float,
-        mean: float = 0.0,
+        self, gp_params: TanimotoGP_Params, fp_func: Callable[[str], Any], smiles_train: list[str], y_train: jnp.ndarray
     ):
-        if amplitude <= 0:
-            raise ValueError("Amplitude must be positive")
-        if noise <= 0:
-            raise ValueError("Noise must be positive")
-
         self._fp_func = fp_func
-        self._amplitude = amplitude
-        self._noise = noise
-        self._mean = mean
-        self.set_training_data(smiles_train, y_train, mean)
+        self._K_test_train = None
+        self._smiles_test = None
+        self.set_training_data(gp_params, smiles_train, y_train)
 
-    @property
-    def amplitude(self) -> float:
-        return self._amplitude
-
-    @property
-    def noise(self) -> float:
-        return self._noise
-
-    @property
-    def mean(self) -> float:
-        return self._mean
-
-    def set_training_data(self, smiles_train: list[str], y_train: jnp.ndarray, mean: float = 0.0):
+    def set_training_data(self, params: TanimotoGP_Params, smiles_train: list[str], y_train: jnp.ndarray):
         self._smiles_train = smiles_train
         self._y_train = jnp.asarray(y_train)
-        self._y_centered = self._y_train - mean
         self._fp_train = [self._fp_func(smiles) for smiles in smiles_train]
         self._K_train_train = jnp.asarray(
             [DataStructs.BulkTanimotoSimilarity(fp, self._fp_train) for fp in self._fp_train]
         )
-        self._cached_L = kgp._k_cholesky(self._K_train_train, self._noise / self._amplitude)
-        self._K_test_train = None
-        self._smiles_test = None
-
-    def marginal_log_likelihood(self) -> jnp.ndarray:
-        return kgp.mll_train(
-            a=self._amplitude,
-            s=self._noise,
-            k_train_train=self._K_train_train,
-            y_train=self._y_centered,
+        self._cached_L = kgp._k_cholesky(
+            self._K_train_train, TRANSFORM(params.raw_noise) / TRANSFORM(params.raw_amplitude)
         )
 
-    def _get_predictions(self, k_test_train, k_test_test, full_covar: bool) -> tuple[jnp.ndarray, jnp.ndarray]:
+    def marginal_log_likelihood(self, params: TanimotoGP_Params) -> jnp.ndarray:
+        y_centered = self._y_train - params.mean
+        return kgp.mll_train(
+            a=TRANSFORM(params.raw_amplitude),
+            s=TRANSFORM(params.raw_noise),
+            k_train_train=self._K_train_train,
+            y_train=y_centered,
+        )
+
+    def _get_predictions(
+        self, params: TanimotoGP_Params, k_test_train, k_test_test, full_covar: bool
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Get centered predictions (before adding back mean)"""
-        if self._cached_L is not None:
-            return kgp._L_noiseless_predict(
-                a=self._amplitude,
-                L=self._cached_L,
-                k_test_train=k_test_train,
-                k_test_test=k_test_test,
-                y_train=self._y_centered,
-                full_covar=full_covar,
-            )
-        else:
-            return kgp.noiseless_predict(
-                a=self._amplitude,
-                s=self._noise,
-                k_train_train=self._K_train_train,
-                k_test_train=k_test_train,
-                k_test_test=k_test_test,
-                y_train=self._y_centered,
-                full_covar=full_covar,
-            )
+        y_centered = self._y_train - params.mean
+        return kgp._L_noiseless_predict(
+            a=TRANSFORM(params.raw_amplitude),
+            L=self._cached_L,
+            k_test_train=k_test_train,
+            k_test_test=k_test_test,
+            y_train=y_centered,
+            full_covar=full_covar,
+        )
 
     def predict_f(
-        self, smiles_test: list[str], full_covar: bool = True, from_train: bool = False
+        self, params: TanimotoGP_Params, smiles_test: list[str], full_covar: bool = True, from_train: bool = False
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         # Handle predictions for training points
         if from_train:
             K_test_test = self._K_train_train if full_covar else jnp.ones(len(smiles_test), dtype=float)
-            mean_centered, covar = self._get_predictions(self._K_train_train, K_test_test, full_covar)
-            return mean_centered + self._mean, covar
+            mean_centered, covar = self._get_predictions(params, self._K_train_train, K_test_test, full_covar)
+            return mean_centered + params.mean, covar
 
         # Initialize K_test_train and smiles_test if needed
         if self._K_test_train is None:
@@ -178,20 +146,20 @@ class FixedTanimotoGP:
             else jnp.ones(len(smiles_test), dtype=float)
         )
 
-        mean_centered, covar = self._get_predictions(self._K_test_train, K_test_test, full_covar)
-        return mean_centered + self._mean, covar
+        mean_centered, covar = self._get_predictions(params, self._K_test_train, K_test_test, full_covar)
+        return mean_centered + params.mean, covar
 
     def predict_y(
-        self, smiles_test: list[str], full_covar: bool = True, from_train: bool = False
+        self, params: TanimotoGP_Params, smiles_test: list[str], full_covar: bool = True, from_train: bool = False
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
-        mean, covar = self.predict_f(smiles_test, full_covar, from_train)
+        mean, covar = self.predict_f(params, smiles_test, full_covar, from_train)
         if full_covar:
-            covar = covar + jnp.eye(len(smiles_test)) * self._noise
+            covar = covar + jnp.eye(len(smiles_test)) * TRANSFORM(params.raw_noise)
         else:
-            covar = covar + self._noise
+            covar = covar + TRANSFORM(params.raw_noise)
         return mean, covar
 
-    def add_observations(self, idx: int, new_y: float):
+    def add_observation(self, params: TanimotoGP_Params, idx: int, new_y: float):
         """
         Adds a single observation and efficiently updates cached matrices
 
@@ -208,7 +176,6 @@ class FixedTanimotoGP:
         # Update training data
         self._smiles_train.append(new_smiles)
         self._y_train = jnp.append(self._y_train, new_y)
-        self._y_centered = self._y_train - self._mean
         self._fp_train.append(new_fp)
 
         # Update K_train_train w/ row from K_test_train
@@ -228,6 +195,5 @@ class FixedTanimotoGP:
         # Add new column to K_test_train
         self._K_test_train = jnp.column_stack([self._K_test_train, k_new_test])
 
-        # If we have cached Cholesky factor, update it efficiently
-        if self._cached_L is not None:
-            self._cached_L = kgp.update_cholesky(L=self._cached_L, k_new=k_new, k_new_new=1.0)
+        # Efficiently update Cholesky factor
+        self._cached_L = kgp.update_cholesky(L=self._cached_L, k_new=k_new, k_new_new=1.0)
