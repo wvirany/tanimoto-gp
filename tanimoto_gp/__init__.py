@@ -13,7 +13,7 @@ class TanimotoGP_Params(NamedTuple):
     raw_amplitude: jnp.ndarray
     raw_noise: jnp.ndarray
 
-    # Consant mean function
+    # Constant mean function
     mean: jnp.ndarray
 
 
