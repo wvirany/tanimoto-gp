@@ -47,7 +47,7 @@ class ConstantMeanTanimotoGP:
         if from_train:
             # Handle predictions for training points
             K_test_train = self._K_train_train
-            K_test_test = self._K_train_train if full_covar else jnp.ones(len(smiles_test), dtype=float)
+            K_test_test = self._K_train_train if full_covar else jnp.ones(len(self._smiles_train), dtype=float)
         else:
             # Construct kernel matrices for test points
             fp_test = [self._fp_func(smiles) for smiles in smiles_test]
@@ -84,7 +84,7 @@ class ConstantMeanTanimotoGP:
 
 
 class FixedTanimotoGP:
-    """ConstantMeanTanimotoGP with fixed parameters and test set for caching data"""
+    """ConstantMeanTanimotoGP with fixed parameters and test set for faster BO w/ cached data"""
 
     def __init__(
         self, gp_params: TanimotoGP_Params, fp_func: Callable[[str], Any], smiles_train: list[str], y_train: jnp.ndarray
@@ -92,7 +92,11 @@ class FixedTanimotoGP:
         self._fp_func = fp_func
         self._K_test_train = None
         self._smiles_test = None
+        self._fp_test = None
         self.set_training_data(gp_params, smiles_train, y_train)
+
+        # Number of BO iterations
+        self._iters = 0
 
     def set_training_data(self, params: TanimotoGP_Params, smiles_train: list[str], y_train: jnp.ndarray):
         self._smiles_train = smiles_train
@@ -133,24 +137,30 @@ class FixedTanimotoGP:
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         # Handle predictions for training points
         if from_train:
-            K_test_test = self._K_train_train if full_covar else jnp.ones(len(smiles_test), dtype=float)
+            K_test_test = self._K_train_train if full_covar else jnp.ones(len(self._smiles_train), dtype=float)
             mean_centered, covar = self._get_predictions(params, self._K_train_train, K_test_test, full_covar)
             return mean_centered + params.mean, covar
 
         # Initialize K_test_train and smiles_test if needed
-        if self._K_test_train is None:
-            fp_test = [self._fp_func(smiles) for smiles in smiles_test]
-            self._K_test_train = jnp.asarray([DataStructs.BulkTanimotoSimilarity(fp, self._fp_train) for fp in fp_test])
+        if self._iters == 0:
+            self._fp_test = [self._fp_func(smiles) for smiles in smiles_test]
+            self._K_test_train = jnp.asarray(
+                [DataStructs.BulkTanimotoSimilarity(fp, self._fp_train) for fp in self._fp_test]
+            )
             self._smiles_test = smiles_test.copy()
 
-        fp_test = [self._fp_func(smiles) for smiles in self._smiles_test]
-
         # Compute K_test_test
-        K_test_test = (
-            jnp.asarray([DataStructs.BulkTanimotoSimilarity(fp, fp_test) for fp in fp_test])
-            if full_covar
-            else jnp.ones(len(smiles_test), dtype=float)
-        )
+        if full_covar:
+            K_test_test = jnp.asarray([DataStructs.BulkTanimotoSimilarity(fp, self._fp_test) for fp in self._fp_test])
+        else:
+            K_test_test = jnp.ones(len(smiles_test), dtype=float)
+
+        # # Compute K_test_test
+        # K_test_test = (
+        #     jnp.asarray([DataStructs.BulkTanimotoSimilarity(fp, fp_test) for fp in fp_test])
+        #     if full_covar
+        #     else jnp.ones(len(smiles_test), dtype=float)
+        # )
 
         mean_centered, covar = self._get_predictions(params, self._K_test_train, K_test_test, full_covar)
         return mean_centered + params.mean, covar
@@ -177,8 +187,8 @@ class FixedTanimotoGP:
 
         # Get SMILES and kernel row for new point
         new_smiles = self._smiles_test[idx]
+        new_fp = self._fp_test[idx]
         k_new_row = self._K_test_train[idx]
-        new_fp = self._fp_func(new_smiles)
 
         # Update training data
         self._smiles_train.append(new_smiles)
@@ -194,10 +204,10 @@ class FixedTanimotoGP:
         # Remove selected point from test set matrices
         self._K_test_train = jnp.delete(self._K_test_train, idx, axis=0)
         self._smiles_test.pop(idx)
+        self._fp_test.pop(idx)
 
         # Compute similarities between new point and remaining test points
-        remaining_fps = [self._fp_func(s) for s in self._smiles_test]
-        k_new_test = jnp.asarray(DataStructs.BulkTanimotoSimilarity(new_fp, remaining_fps))
+        k_new_test = jnp.asarray(DataStructs.BulkTanimotoSimilarity(new_fp, self._fp_test))
 
         # Add new column to K_test_train
         self._K_test_train = jnp.column_stack([self._K_test_train, k_new_test])
@@ -205,5 +215,11 @@ class FixedTanimotoGP:
         # Efficiently update Cholesky factor
         a = TRANSFORM(params.raw_amplitude)
         s = TRANSFORM(params.raw_noise)
-        k_new_diag = 1.0 + s / a
-        self._cached_L = kgp.update_cholesky(L=self._cached_L, k_new_row=k_new_row, k_new_diag=k_new_diag)
+        k_new_diag = 1.0 + (s / a)
+
+        if self._iters % 100 == 0:
+            self._cached_L = kgp._k_cholesky(self._K_train_train, s / a)
+        else:
+            self._cached_L = kgp.update_cholesky(L=self._cached_L, k_new_row=k_new_row, k_new_diag=k_new_diag)
+
+        self._iters += 1
